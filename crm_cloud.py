@@ -3,7 +3,7 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 import io
-# Nueva librería para el micrófono
+# Librería para el micrófono
 from streamlit_mic_recorder import speech_to_text
 
 # --- CONFIGURACIÓN ---
@@ -48,7 +48,47 @@ def generar_no_oportunidad():
         return int(max_op) + 1 if pd.notna(max_op) else 100000
     except: return 100000
 
-# --- INTERFAZ ---
+# --- FUNCIÓN AUXILIAR PARA VOZ Y TEXTO ---
+def render_voice_input(label, key_base, height=100):
+    """
+    Crea un bloque con botón de micrófono y área de texto.
+    Maneja el estado para que no se borre lo escrito manualmente.
+    """
+    # 1. Crear llaves únicas para session_state
+    key_text = f"{key_base}_text"
+    key_voice = f"{key_base}_voice"
+    key_last_voice = f"{key_base}_last_voice"
+
+    # 2. Inicializar estado del texto si no existe
+    if key_text not in st.session_state:
+        st.session_state[key_text] = ""
+    if key_last_voice not in st.session_state:
+        st.session_state[key_last_voice] = ""
+
+    # 3. Componente de micrófono
+    st.markdown(f"**{label}**")
+    voice_content = speech_to_text(
+        language='es', 
+        start_prompt="🎙️ Grabar", 
+        stop_prompt="⏹️ Detener", 
+        just_once=True,
+        key=key_voice
+    )
+
+    # 4. Lógica de actualización: Solo sobrescribir si hay NUEVA voz
+    if voice_content and voice_content != st.session_state[key_last_voice]:
+        st.session_state[key_text] = voice_content
+        st.session_state[key_last_voice] = voice_content
+
+    # 5. Área de texto vinculada al estado (permite edición manual)
+    return st.text_area(
+        label="", 
+        key=key_text, 
+        height=height, 
+        placeholder="Escriba aquí o use el micrófono..."
+    )
+
+# --- INTERFAZ PRINCIPAL ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
@@ -69,10 +109,13 @@ else:
         st.session_state.logged_in = False
         st.rerun()
 
-    # --- FUNNEL ---
+    # ==========================================
+    # 1. FUNNEL COMERCIAL
+    # ==========================================
     if menu == "Funnel Comercial":
         st.header("📉 Gestión de Oportunidades")
         t1, t2 = st.tabs(["🆕 Crear Oportunidad", "✏️ Actualizar Avance"])
+        
         with t1:
             with st.form("f_nuevo"):
                 c1, c2 = st.columns(2)
@@ -81,6 +124,7 @@ else:
                 prod = c1.selectbox("Producto", PRODUCTOS)
                 val = c2.number_input("Valor ($)", min_value=0.0)
                 f_cie = c2.date_input("Fecha Cierre")
+                
                 if st.form_submit_button("🚀 Crear"):
                     if cli_nom:
                         n_op = generar_no_oportunidad()
@@ -91,6 +135,7 @@ else:
                             "comercial_id": st.session_state.user_id, "fecha_gestion": str(datetime.now())
                         }])
                         if save_data("funnel", fila): st.success(f"Op #{n_op} creada!")
+        
         with t2:
             busq = st.number_input("Buscar NIT:", min_value=1, format="%d")
             df_f = get_data("funnel")
@@ -98,9 +143,11 @@ else:
                 df_cli = df_f[df_f['cliente_id'] == busq].sort_values('fecha_gestion', ascending=False)
                 op_sel = st.selectbox("Seleccione Negocio:", df_cli['no_oportunidad'].unique())
                 row = df_cli[df_cli['no_oportunidad'] == op_sel].iloc[0]
+                
                 with st.form("f_av"):
                     ne = st.selectbox("Nueva Etapa", ETAPAS, index=ETAPAS.index(row['etapa']) if row['etapa'] in ETAPAS else 0)
                     nest = st.selectbox("Nuevo Estado", ESTADOS, index=ESTADOS.index(row['estado']) if row['estado'] in ESTADOS else 0)
+                    
                     if st.form_submit_button("Actualizar"):
                         fila = pd.DataFrame([{
                             "id": None, "cliente_id": busq, "cliente_nombre": row['cliente_nombre'],
@@ -110,18 +157,13 @@ else:
                         }])
                         if save_data("funnel", fila): st.success("Actualizado")
 
-    # --- BITÁCORA CON VOZ ---
+    # ==========================================
+    # 2. BITÁCORA (VISITAS) - Con Voz Mejorada
+    # ==========================================
     elif menu == "Bitácora (Visitas)":
         st.header("📒 Bitácora con Dictado de Voz")
-        st.info("Presiona 'Start' para hablar y 'Stop' para transcribir.")
         
         nit_bit = st.number_input("NIT Cliente:", min_value=1, format="%d")
-        
-        # Inicializar variables de estado para el texto si no existen
-        if 'txt_temas' not in st.session_state: st.session_state.txt_temas = ""
-        if 'txt_res' not in st.session_state: st.session_state.txt_res = ""
-        if 'txt_obj' not in st.session_state: st.session_state.txt_obj = ""
-
         tab_b1, tab_b2 = st.tabs(["📝 Nuevo Registro", "📜 Historial"])
         
         with tab_b1:
@@ -129,31 +171,10 @@ else:
             f_cont = c1.date_input("Fecha Contacto")
             nom_cont = c2.text_input("Nombre Contacto")
             
-            # --- SECCIÓN DE DICTADO ---
-            st.markdown("### 1. Temas Abordados")
-            # El componente de voz
-            text_voice_temas = speech_to_text(language='es', start_prompt="🎙️ Grabar Temas", stop_prompt="⏹️ Detener", key='voice_temas')
-            # Si hay voz, actualizamos el estado, si no, mantenemos lo que haya escrito
-            if text_voice_temas:
-                st.session_state.txt_temas = text_voice_temas
-            # El cuadro de texto se alimenta del estado
-            temas = st.text_area("Texto final (puedes editarlo):", value=st.session_state.txt_temas, key="area_temas")
-            # Sincronización inversa (si escribe a mano, actualizamos el estado)
-            st.session_state.txt_temas = temas
-
-            st.markdown("### 2. Resultados")
-            text_voice_res = speech_to_text(language='es', start_prompt="🎙️ Grabar Resultados", stop_prompt="⏹️ Detener", key='voice_res')
-            if text_voice_res:
-                st.session_state.txt_res = text_voice_res
-            resultados = st.text_area("Texto final:", value=st.session_state.txt_res, key="area_res")
-            st.session_state.txt_res = resultados
-
-            st.markdown("### 3. Siguiente Paso")
-            text_voice_obj = speech_to_text(language='es', start_prompt="🎙️ Grabar Objetivo", stop_prompt="⏹️ Detener", key='voice_obj')
-            if text_voice_obj:
-                st.session_state.txt_obj = text_voice_obj
-            obj_prox = st.text_input("Texto final:", value=st.session_state.txt_obj, key="area_obj")
-            st.session_state.txt_obj = obj_prox
+            # Usamos la función auxiliar para manejar voz + texto manual
+            temas = render_voice_input("1. Temas Abordados", "bit_temas")
+            resultados = render_voice_input("2. Resultados Obtenidos", "bit_res")
+            obj_prox = render_voice_input("3. Objetivo Siguiente Paso", "bit_obj", height=68)
             
             f_prox = st.date_input("Fecha Siguiente Contacto")
 
@@ -167,10 +188,10 @@ else:
                     }])
                     if save_data("bitacora", fila):
                         st.success("¡Visita guardada!")
-                        # Limpiar campos después de guardar
-                        st.session_state.txt_temas = ""
-                        st.session_state.txt_res = ""
-                        st.session_state.txt_obj = ""
+                        # Limpiar campos manualmente en session_state
+                        st.session_state["bit_temas_text"] = ""
+                        st.session_state["bit_res_text"] = ""
+                        st.session_state["bit_obj_text"] = ""
                         st.rerun()
                 else: st.error("Falta NIT o Nombre")
 
@@ -179,16 +200,72 @@ else:
                 df_b = get_data("bitacora")
                 if not df_b.empty:
                     f = df_b[df_b['cliente_id'] == nit_bit].sort_values('fecha_contacto', ascending=False)
-                    st.dataframe(f)
-                else: st.info("Sin historial")
+                    for i, r in f.iterrows():
+                        with st.expander(f"{r['fecha_contacto']} - {r['nombre_contacto']}"):
+                            st.write(f"**Temas:** {r['temas']}")
+                            st.write(f"**Resultados:** {r['resultados']}")
+                            st.caption(f"Prox: {r['objetivo_prox']} ({r['fecha_prox']})")
 
-    # --- PLAN DE CUENTA Y REPORTES (Simplificado) ---
+    # ==========================================
+    # 3. PLAN DE CUENTA (RESTAURADO)
+    # ==========================================
     elif menu == "Plan de Cuenta":
-        st.header("Plan de Cuenta")
-        # (Código igual al anterior, resumido aquí por espacio)
-        id_p = st.number_input("NIT:", min_value=1)
-        if st.button("Guardar Plan (Simulado)"): st.success("Guardado")
+        st.header("📋 Plan de Cuenta Estratégico")
+        st.info("Utiliza los micrófonos para dictar el análisis extenso.")
         
+        id_p = st.number_input("NIT Cliente:", min_value=1, format="%d", key="nit_plan")
+        
+        # Cargar último plan si existe
+        if id_p:
+            df_p = get_data("plan_cuenta")
+            prev_analisis = ""
+            prev_cadena = ""
+            prev_riesgos = ""
+            
+            if not df_p.empty:
+                filtro = df_p[df_p['cliente_id'] == id_p].sort_values('fecha_gestion', ascending=False)
+                if not filtro.empty:
+                    last = filtro.iloc[0]
+                    prev_analisis = last.get('analisis_fin_pos', '')
+                    prev_cadena = last.get('cadena_valor_pos', '')
+                    prev_riesgos = last.get('riesgos', '')
+            
+            # Inicializar los campos con el valor de la base de datos SI es la primera vez que carga
+            if f"plan_fin_text" not in st.session_state:
+                st.session_state["plan_fin_text"] = prev_analisis
+                st.session_state["plan_cad_text"] = prev_cadena
+                st.session_state["plan_rsk_text"] = prev_riesgos
+
+            # Campos con voz
+            a_pos = render_voice_input("Análisis Financiero", "plan_fin", height=150)
+            c_val = render_voice_input("Cadena de Valor", "plan_cad", height=150)
+            riesgos = render_voice_input("Riesgos Detectados", "plan_rsk", height=100)
+            
+            if st.button("💾 Guardar Plan de Cuenta"):
+                fila = pd.DataFrame([{
+                    "id": None, "cliente_id": id_p, 
+                    "analisis_fin_pos": a_pos, "analisis_fin_rev": "", 
+                    "cadena_valor_pos": c_val, "cadena_valor_rev": "",
+                    "flujo_efec_pos": "", "flujo_efec_rev": "", 
+                    "riesgos": riesgos,
+                    "comercial_id": st.session_state.user_id, "fecha_gestion": str(datetime.now())
+                }])
+                if save_data("plan_cuenta", fila): 
+                    st.success("Plan estratégico actualizado en la nube.")
+
+    # ==========================================
+    # 4. REPORTES
+    # ==========================================
     elif menu == "Reportes":
-        st.header("Reportes")
-        if st.button("Descargar Excel"): st.info("Funcionalidad lista")
+        st.header("📊 Descarga de Información")
+        tipo = st.selectbox("Base de Datos:", ["Funnel Comercial", "Bitácora", "Plan de Cuenta"])
+        sheet_map = {"Funnel Comercial": "funnel", "Bitácora": "bitacora", "Plan de Cuenta": "plan_cuenta"}
+        
+        if st.button("Generar Excel"):
+            df_rep = get_data(sheet_map[tipo])
+            if not df_rep.empty:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_rep.to_excel(writer, index=False)
+                st.download_button("📥 Descargar", output.getvalue(), f"{sheet_map[tipo]}.xlsx")
+            else: st.warning("Sin datos.")
